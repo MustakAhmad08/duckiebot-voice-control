@@ -58,12 +58,12 @@ python3 main_laptop.py --robot-ip <ROBOT_IP>
 | Say this…                          | Does this…              |
 |------------------------------------|-------------------------|
 | "go forward"                       | Drive forward until stopped |
-| "turn left"                        | Pivot left 1.5s         |
-| "turn right"                       | Pivot right 1.5s        |
+| "turn left"                        | Arc left until stopped  |
+| "turn right"                       | Arc right until stopped |
 | "stop" / "halt" / "brake"          | Stop immediately        |
-| "reverse" / "go back"              | Reverse 1.5s            |
-| "curve left" / "veer right"        | Soft curve              |
-| "spin left" / "rotate right"       | Sharp in-place spin     |
+| "reverse" / "go back"              | Reverse until stopped   |
+| "curve left" / "veer right"        | Soft curve until stopped |
+| "spin left" / "rotate right"       | Spin until stopped      |
 | "follow the lane" / "autonomous"   | Enable lane-following   |
 | "manual" / "take control"          | Disable lane-following  |
 | "full speed"                       | Set speed to maximum    |
