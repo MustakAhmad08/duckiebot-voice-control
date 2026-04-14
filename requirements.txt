@@ -1,0 +1,12 @@
+# ── laptop/requirements.txt ───────────────────────────────────────────────────
+# Install with: pip install -r requirements.txt
+
+# Azure Speech-to-Text
+azure-cognitiveservices-speech>=1.38.0
+
+# Azure OpenAI (GPT)
+openai>=1.30.0
+
+# Fallback STT (optional, used if Azure SDK not available)
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.14       # may need: brew install portaudio  /  apt install portaudio19-dev
