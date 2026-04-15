@@ -10,6 +10,11 @@ import queue
 import threading
 import logging
 
+try:
+    import config  # noqa: F401  - optional local secrets for development
+except ImportError:
+    config = None
+
 log = logging.getLogger(__name__)
 
 # ─── Azure Speech SDK (preferred) ────────────────────────────────────────────
@@ -27,8 +32,14 @@ try:
 except ImportError:
     SR_AVAILABLE = False
 
-AZURE_SPEECH_KEY    = os.environ.get("AZURE_SPEECH_KEY", "")
-AZURE_SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "eastus")
+# ❌ OLD (removed)
+# AZURE_SPEECH_KEY    = os.environ.get("AZURE_SPEECH_KEY", "")
+# AZURE_SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "eastus")
+
+# ✅ NEW (minimal fix)
+AZURE_SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY") or getattr(config, "AZURE_SPEECH_KEY", "")
+
+AZURE_SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION") or getattr(config, "AZURE_SPEECH_REGION", "eastus")
 
 
 class AzureSpeechListener:
@@ -37,14 +48,14 @@ class AzureSpeechListener:
     def __init__(self, callback, language="en-US"):
         if not AZURE_SPEECH_AVAILABLE:
             raise RuntimeError("azure-cognitiveservices-speech not installed")
-        config = speechsdk.SpeechConfig(
+        config_speech = speechsdk.SpeechConfig(   # renamed variable to avoid clash
             subscription=AZURE_SPEECH_KEY,
             region=AZURE_SPEECH_REGION,
         )
-        config.speech_recognition_language = language
+        config_speech.speech_recognition_language = language
         audio_config = speechsdk.audio.AudioConfig(use_default_microphone=True)
         self.recognizer = speechsdk.SpeechRecognizer(
-            speech_config=config, audio_config=audio_config
+            speech_config=config_speech, audio_config=audio_config
         )
         self.callback = callback
         self._running = False

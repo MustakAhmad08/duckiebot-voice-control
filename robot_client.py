@@ -10,11 +10,13 @@ import threading
 import queue
 import time
 import logging
+from typing import List, Optional
 
 log = logging.getLogger(__name__)
 
-RECONNECT_DELAY = 2.0   # seconds between reconnection attempts
+RECONNECT_DELAY = 2.0
 SEND_TIMEOUT    = 1.0
+DEFAULT_PORT    = 9010   # FIX: was 9000, must match motor_controller.PORT
 
 
 class RobotClient:
@@ -23,10 +25,10 @@ class RobotClient:
     send_command() is non-blocking — commands are queued and sent by a worker thread.
     """
 
-    def __init__(self, host: str, port: int = 9000):
+    def __init__(self, host: str, port: int = DEFAULT_PORT):
         self.host = host
         self.port = port
-        self._sock: socket.socket | None = None
+        self._sock = None  # type: Optional[socket.socket]
         self._q: queue.Queue = queue.Queue(maxsize=20)
         self._connected = threading.Event()
         self._running = True
@@ -41,12 +43,10 @@ class RobotClient:
 
     def send_command(self, cmd: dict):
         """Queue a command dict for sending. Drops oldest if queue is full."""
-        # Always let stop through immediately
         if cmd.get("cmd") == "stop":
             try:
                 self._q.put_nowait(cmd)
             except queue.Full:
-                # Drain one and retry
                 try: self._q.get_nowait()
                 except queue.Empty: pass
                 self._q.put_nowait(cmd)
@@ -56,7 +56,7 @@ class RobotClient:
             except queue.Full:
                 log.debug("Queue full — command dropped")
 
-    def send_commands(self, cmds: list[dict]):
+    def send_commands(self, cmds: List[dict]):
         for c in cmds:
             self.send_command(c)
 
@@ -86,7 +86,6 @@ class RobotClient:
                     self._sock = sock
                 self._connected.set()
                 log.info(f"Connected to robot at {self.host}:{self.port}")
-                # Wait until disconnected
                 while self._running and self._connected.is_set():
                     time.sleep(0.5)
             except (ConnectionRefusedError, OSError, TimeoutError) as e:

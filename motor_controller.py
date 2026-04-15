@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """
-motor_controller.py — Robot-side motor controller for Duckiebot
-Receives commands over a simple TCP socket from the laptop.
-Controls left/right wheel motors via Adafruit MotorHAT or direct GPIO.
+motor_controller.py — TCP → ROS 1 bridge for Duckiebot
+Receives JSON command packets from the laptop over TCP and publishes
+to the official Duckietown ROS topics.
+
+ROS topics used:
+  /ROBOT_NAME/wheels_driver_node/wheels_cmd  (duckietown_msgs/WheelsCmdStamped)
+  /ROBOT_NAME/lane_following_node/switch     (duckietown_msgs/BoolStamped)
+  /ROBOT_NAME/joy_mapper_node/car_cmd        (duckietown_msgs/Twist2DStamped)
+
+Run with:
+  rosrun <your_package> motor_controller.py
+  or standalone:
+  python3 motor_controller.py
 """
 
 import socket
@@ -10,193 +20,251 @@ import json
 import threading
 import time
 import logging
-import sys
 import os
 
-logging.basicConfig(level=logging.INFO, format="[ROBOT] %(asctime)s %(message)s")
+logging.basicConfig(level=logging.INFO, format="[BRIDGE] %(asctime)s %(message)s")
 log = logging.getLogger(__name__)
 
-# ─── Try to import real motor libraries; fall back to stubs for dev ───────────
+# ─── ROS imports ──────────────────────────────────────────────────────────────
 try:
-    from Adafruit_MotorHAT import Adafruit_MotorHAT
-    HAT_AVAILABLE = True
+    import rospy
+    from duckietown_msgs.msg import WheelsCmdStamped, BoolStamped, Twist2DStamped
+    ROS_AVAILABLE = True
 except ImportError:
-    HAT_AVAILABLE = False
-    log.warning("Adafruit_MotorHAT not found — running in simulation mode")
+    ROS_AVAILABLE = False
+    log.warning("rospy / duckietown_msgs not found — simulation mode")
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-HOST = "0.0.0.0"          # Listen on all interfaces
-PORT = 9000               # Must match laptop client
-MAX_SPEED = 200           # 0-255 for MotorHAT
-TURN_SPEED = 150
-BASE_SPEED = 180
-WATCHDOG_TIMEOUT = 2.0    # Stop if no command received within N seconds
-I2C_BUS = int(os.environ.get("DUCKIE_I2C_BUS", "1"))
+HOST             = "0.0.0.0"
+PORT             = 9010               # Must match robot_client.DEFAULT_PORT
+WATCHDOG_TIMEOUT = 5.0
 
-# Motor IDs on the HAT (adjust to your wiring)
-LEFT_MOTOR_ID  = 1
-RIGHT_MOTOR_ID = 2
+ROBOT_NAME = os.environ.get("VEHICLE_NAME", "duckie")
+
+# Tunables for manual driving via Twist2DStamped.
+MAX_WHEEL  = 1.0
+BASE_V     = float(os.environ.get("DUCKIE_BASE_V", "0.25"))
+TURN_V     = float(os.environ.get("DUCKIE_TURN_V", "0.20"))
+CURVE_OMEGA = float(os.environ.get("DUCKIE_CURVE_OMEGA", "2.5"))
+TURN_OMEGA  = float(os.environ.get("DUCKIE_TURN_OMEGA", "4.0"))
+SPIN_OMEGA  = float(os.environ.get("DUCKIE_SPIN_OMEGA", "6.0"))
 
 
-class MotorDriver:
-    """Thin wrapper around Adafruit_MotorHAT with a simulation fallback."""
+# ─── ROS Publisher wrapper ────────────────────────────────────────────────────
+
+class ROSDriver:
+    """
+    Publishes wheel and lane commands to the official Duckietown ROS topics.
+    Falls back to simulation logging when ROS is unavailable.
+    """
 
     def __init__(self):
-        if HAT_AVAILABLE:
-            self.hat = Adafruit_MotorHAT(addr=0x60, i2c_bus=I2C_BUS)
-            self.left  = self.hat.getMotor(LEFT_MOTOR_ID)
-            self.right = self.hat.getMotor(RIGHT_MOTOR_ID)
+        self._state_lock = threading.Lock()
+        self._lane_enabled = False
+        if ROS_AVAILABLE:
+            rospy.init_node("tcp_bridge", anonymous=False, disable_signals=True)
+            ns = f"/{ROBOT_NAME}"
+            self._wheels_pub = rospy.Publisher(
+                f"{ns}/wheels_driver_node/wheels_cmd",
+                WheelsCmdStamped, queue_size=1)
+            self._lane_pub = rospy.Publisher(
+                f"{ns}/lane_following_node/switch",
+                BoolStamped, queue_size=1)
+            self._car_cmd_pub = rospy.Publisher(
+                f"{ns}/joy_mapper_node/car_cmd",
+                Twist2DStamped, queue_size=1)
+            log.info(f"ROS node initialised — robot namespace: {ns}")
         else:
-            self.hat = self.left = self.right = None
-        self._left_speed  = 0
-        self._right_speed = 0
+            self._wheels_pub = self._lane_pub = self._car_cmd_pub = None
 
-    def set(self, left_speed: int, right_speed: int):
-        """
-        Set individual wheel speeds.
-        Positive = forward, negative = backward, 0 = stop.
-        Speed magnitude: 0-255.
-        """
-        self._left_speed  = left_speed
-        self._right_speed = right_speed
-        if HAT_AVAILABLE:
-            self._apply(self.left,  left_speed)
-            self._apply(self.right, right_speed)
+    def set_wheels(self, left: float, right: float):
+        """Publish normalised wheel speeds in [-1.0, 1.0]."""
+        left  = max(-MAX_WHEEL, min(MAX_WHEEL, left))
+        right = max(-MAX_WHEEL, min(MAX_WHEEL, right))
+        if ROS_AVAILABLE:
+            msg = WheelsCmdStamped()
+            msg.header.stamp = rospy.Time.now()
+            msg.vel_left  = left
+            msg.vel_right = right
+            self._wheels_pub.publish(msg)
         else:
-            log.info(f"[SIM] L={left_speed:+4d}  R={right_speed:+4d}")
+            log.info(f"[SIM] wheels L={left:+.2f}  R={right:+.2f}")
 
-    def _apply(self, motor, speed):
-        if speed > 0:
-            motor.setSpeed(min(speed, 255))
-            motor.run(Adafruit_MotorHAT.FORWARD)
-        elif speed < 0:
-            motor.setSpeed(min(abs(speed), 255))
-            motor.run(Adafruit_MotorHAT.BACKWARD)
+    def set_car_cmd(self, v: float, omega: float):
+        """Publish a car command to Duckietown's normal kinematics path."""
+        if ROS_AVAILABLE:
+            msg = Twist2DStamped()
+            msg.header.stamp = rospy.Time.now()
+            msg.v = v
+            msg.omega = omega
+            self._car_cmd_pub.publish(msg)
         else:
-            motor.run(Adafruit_MotorHAT.RELEASE)
+            log.info(f"[SIM] car_cmd v={v:+.2f} omega={omega:+.2f}")
+
+    def set_lane(self, enabled: bool):
+        """Enable or disable the Duckietown lane-following node."""
+        with self._state_lock:
+            self._lane_enabled = enabled
+        if ROS_AVAILABLE:
+            msg = BoolStamped()
+            msg.header.stamp = rospy.Time.now()
+            msg.data = enabled
+            self._lane_pub.publish(msg)
+        else:
+            log.info(f"[SIM] lane_following={'ON' if enabled else 'OFF'}")
+
+    def drive(self, v: float, omega: float):
+        """Manual driving always takes control away from lane following."""
+        if self.lane_enabled:
+            self.set_lane(False)
+        self.set_car_cmd(v, omega)
+
+    @property
+    def lane_enabled(self) -> bool:
+        with self._state_lock:
+            return self._lane_enabled
 
     def stop(self):
-        self.set(0, 0)
+        # Disable autonomy first so it cannot immediately overwrite the stop.
+        if self.lane_enabled:
+            self.set_lane(False)
+        self.set_car_cmd(0.0, 0.0)
+        self.set_wheels(0.0, 0.0)
 
+
+# ─── RobotServer ──────────────────────────────────────────────────────────────
 
 class RobotServer:
-    """
-    TCP server that receives JSON command packets from the laptop and drives motors.
-    Packet schema: {"cmd": "<action>", "param": <optional float>}
-    """
+    """TCP server that translates JSON command packets into ROS topic publishes."""
 
-    # FIX: "left"/"right" changed from spin-in-place to forward-arcing turns.
-    # The old implementation was identical to spin_left/spin_right, which is
-    # unsuitable for a moving racetrack.  An arcing turn keeps the outer wheel
-    # at BASE_SPEED and slows the inner wheel to ~20% to produce a tight but
-    # still-forward arc.
-    COMMANDS = {
-        "forward":     lambda d, p: d.set( BASE_SPEED,  BASE_SPEED),
-        "backward":    lambda d, p: d.set(-BASE_SPEED, -BASE_SPEED),
-        "left":        lambda d, p: d.set( int(BASE_SPEED * 0.2),  BASE_SPEED),
-        "right":       lambda d, p: d.set( BASE_SPEED, int(BASE_SPEED * 0.2)),
-        "stop":        lambda d, p: d.stop(),
-        "speed":       lambda d, p: d.set(int(p * MAX_SPEED), int(p * MAX_SPEED)),
-        "spin_left":   lambda d, p: d.set(-MAX_SPEED,  MAX_SPEED),
-        "spin_right":  lambda d, p: d.set( MAX_SPEED, -MAX_SPEED),
-        "curve_left":  lambda d, p: d.set( int(BASE_SPEED * 0.4),  BASE_SPEED),
-        "curve_right": lambda d, p: d.set( BASE_SPEED, int(BASE_SPEED * 0.4)),
-    }
-
-    def __init__(self, driver=None, host: str = HOST, port: int = PORT):
-        self.driver = driver if driver is not None else MotorDriver()
-        self.host = host
-        self.port = port
-        self.last_cmd_time = time.time()
-        self._lock = threading.Lock()
-        self._running = True
+    def __init__(self, driver: ROSDriver = None, host: str = HOST, port: int = PORT):
+        self.driver            = driver or ROSDriver()
+        self.host              = host
+        self.port              = port
+        self.last_cmd_time     = time.time()
+        self._client_count     = 0
+        self._lock             = threading.Lock()
+        self._running          = True
         self._watchdog_stopped = False
+
+    # ── Client handler ────────────────────────────────────────────────────────
 
     def handle_client(self, conn, addr):
         log.info(f"Connected: {addr}")
-        buffer = ""
+        conn.settimeout(1.0)
+        buf = ""
+        with self._lock:
+            self._client_count += 1
         try:
             while self._running:
-                data = conn.recv(1024).decode("utf-8")
+                try:
+                    data = conn.recv(1024).decode()
+                except socket.timeout:
+                    continue
                 if not data:
                     break
-                buffer += data
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
+                buf += data
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
                     line = line.strip()
                     if not line:
                         continue
                     try:
-                        pkt = json.loads(line)
-                        try:
-                            self._dispatch(pkt)
-                        except Exception:
-                            log.exception(f"Command dispatch failed for packet: {pkt}")
-                            raise
+                        self._dispatch(json.loads(line))
                     except json.JSONDecodeError as e:
                         log.warning(f"Bad JSON: {line!r} — {e}")
-        except ConnectionResetError:
-            log.warning(f"Client reset connection: {addr}")
+                    except Exception:
+                        log.exception("Dispatch error")
         except Exception:
-            log.exception(f"Robot client handler crashed for {addr}")
+            log.exception(f"Client handler crashed for {addr}")
         finally:
-            self.driver.stop()
+            should_stop = False
+            with self._lock:
+                self._client_count = max(0, self._client_count - 1)
+                should_stop = self._client_count == 0
+            if should_stop:
+                self.driver.stop()
             conn.close()
             log.info(f"Disconnected: {addr}")
 
+    # ── Command execution ─────────────────────────────────────────────────────
+
+    def _execute(self, cmd: str, param: float):
+        clamped = max(min(float(param), 1.0), -1.0)
+        commands = {
+            "forward":     lambda: self.driver.drive( BASE_V, 0.0),
+            "backward":    lambda: self.driver.drive(-BASE_V, 0.0),
+            "left":        lambda: self.driver.drive( TURN_V,  TURN_OMEGA),
+            "right":       lambda: self.driver.drive( TURN_V, -TURN_OMEGA),
+            "curve_left":  lambda: self.driver.drive( BASE_V,  CURVE_OMEGA),
+            "curve_right": lambda: self.driver.drive( BASE_V, -CURVE_OMEGA),
+            "spin_left":   lambda: self.driver.drive( 0.0,  SPIN_OMEGA),
+            "spin_right":  lambda: self.driver.drive( 0.0, -SPIN_OMEGA),
+            "stop":        lambda: self.driver.stop(),
+            "lane_on":     lambda: self.driver.set_lane(True),
+            "lane_off":    lambda: self.driver.set_lane(False),
+            "speed":       lambda: self.driver.drive(clamped * BASE_V, 0.0),
+        }
+        fn = commands.get(cmd)
+        if fn:
+            fn()
+        else:
+            log.warning(f"Unknown command: {cmd!r}")
+
+    # ── Dispatch ──────────────────────────────────────────────────────────────
+
     def _dispatch(self, pkt: dict):
-        cmd   = pkt.get("cmd", "").lower()
+        cmd   = pkt.get("cmd",   "").lower()
         param = pkt.get("param", 1.0)
         with self._lock:
-            self.last_cmd_time = time.time()
+            self.last_cmd_time     = time.time()
             self._watchdog_stopped = False
-            if cmd in self.COMMANDS:
-                log.info(f"CMD: {cmd}  param={param}")
-                self.COMMANDS[cmd](self.driver, param)
-            else:
-                log.warning(f"Unknown command: {cmd!r}")
+        log.info(f"CMD: {cmd}  param={param}")
+        self._execute(cmd, param)
+
+    # ── Watchdog ──────────────────────────────────────────────────────────────
 
     def pet_watchdog(self):
-        """FIX #2: allow external callers (e.g. LaneFollower) to reset the watchdog
-        timer so autonomous driving doesn't get killed mid-lap."""
         with self._lock:
-            self.last_cmd_time = time.time()
+            self.last_cmd_time     = time.time()
             self._watchdog_stopped = False
 
     def watchdog(self):
-        """Stop motors if no command arrives within WATCHDOG_TIMEOUT seconds."""
         while self._running:
-            time.sleep(0.25)
+            time.sleep(0.5)
             with self._lock:
-                if time.time() - self.last_cmd_time > WATCHDOG_TIMEOUT and not self._watchdog_stopped:
-                    self.driver.stop()
+                elapsed         = time.time() - self.last_cmd_time
+                already_stopped = self._watchdog_stopped
+            if elapsed > WATCHDOG_TIMEOUT and not already_stopped:
+                log.warning("Watchdog timeout — stopping motors")
+                self.driver.stop()
+                with self._lock:
                     self._watchdog_stopped = True
 
-    def run(self):
-        wd = threading.Thread(target=self.watchdog, daemon=True)
-        wd.start()
+    # ── Server loop ───────────────────────────────────────────────────────────
 
+    def run(self):
+        threading.Thread(target=self.watchdog, daemon=True).start()
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 srv.bind((self.host, self.port))
             except OSError as e:
                 raise RuntimeError(
-                    f"Failed to bind robot server to {self.host}:{self.port}. "
-                    f"Another process may already be using that port."
+                    f"Failed to bind to {self.host}:{self.port} — "
+                    f"port may already be in use."
                 ) from e
-            srv.listen(5)   # FIX #3: raise backlog so rapid reconnects aren't refused
-            log.info(f"Listening on {self.host}:{self.port}")
-            try:
-                while self._running:
+            srv.listen(5)
+            log.info(f"TCP bridge listening on {self.host}:{self.port}")
+            while self._running:
+                try:
                     conn, addr = srv.accept()
-                    t = threading.Thread(target=self.handle_client,
-                                        args=(conn, addr), daemon=True)
-                    t.start()
-            except KeyboardInterrupt:
-                log.info("Shutting down…")
-                self._running = False
-                self.driver.stop()
+                    threading.Thread(target=self.handle_client,
+                                     args=(conn, addr), daemon=True).start()
+                except KeyboardInterrupt:
+                    log.info("Shutting down…")
+                    self._running = False
+                    self.driver.stop()
 
 
 if __name__ == "__main__":

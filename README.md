@@ -1,6 +1,6 @@
 # Duckiebot Voice Controller — ECE49595NL HW2
 
-Drive a Duckiebot robot using spoken English. Speech → Azure STT → GPT parser → TCP → motors.
+Drive a Duckiebot robot using spoken English. Speech → Azure STT → GPT parser → TCP → ROS.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -10,14 +10,13 @@ Drive a Duckiebot robot using spoken English. Speech → Azure STT → GPT parse
 │                                  │                                │
 │                             RobotClient (TCP)                     │
 └──────────────────────────────┬───────────────────────────────────┘
-                               │  WiFi  port 9000
+                               │  WiFi  port 9010
 ┌──────────────────────────────┴───────────────────────────────────┐
 │  DUCKIEBOT (Jetson Nano)                                          │
 │                                                                   │
-│  RobotServer → MotorDriver                                        │
+│  RobotServer → joy_mapper_node/car_cmd                            │
 │             ↕                                                     │
-│  LaneFollower (camera / OpenCV)                                   │
-│  ObstacleAvoider (ToF sensor)                                     │
+│  Duckietown ROS nodes (kinematics, wheels, lane following)        │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -28,7 +27,9 @@ Drive a Duckiebot robot using spoken English. Speech → Azure STT → GPT parse
 ### 1. Set up the Laptop
 
 ```bash
-cd laptop/
+cd files
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 
 # Edit config.py with your Azure keys:
@@ -38,19 +39,13 @@ pip install -r requirements.txt
 
 ### 2. Set up the Robot
 
-SSH into the Duckiebot:
-```bash
-ssh duckie@<ROBOT_IP>
-
-cd robot/
-pip install -r requirements.txt
-python3 main_robot.py
-```
+Use the Docker-based robot procedure in [RUNBOOK.md](RUNBOOK.md).
 
 ### 3. Run the Laptop Controller
 
 ```bash
-python3 main_laptop.py --robot-ip <ROBOT_IP>
+cd files
+./.venv/bin/python main_laptop.py --robot-ip <ROBOT_IP> --robot-port 9010
 ```
 
 ### 4. Speak!
@@ -74,21 +69,17 @@ python3 main_laptop.py --robot-ip <ROBOT_IP>
 ## File Structure
 
 ```
-duckiebot/
-├── laptop/
-│   ├── main_laptop.py      ← Entry point (run this on your laptop)
-│   ├── speech_input.py     ← Azure STT / fallback mic listener
-│   ├── nlp_parser.py       ← GPT + rule-based command parser
-│   ├── robot_client.py     ← TCP client to robot
-│   ├── config.py           ← Your API keys (DO NOT commit)
-│   └── requirements.txt
-│
-└── robot/
-    ├── main_robot.py       ← Entry point (run this on the Duckiebot)
-    ├── motor_controller.py ← TCP server + motor driver
-    ├── lane_follower.py    ← Camera-based lane following (OpenCV)
-    ├── obstacle_avoidance.py ← ToF sensor safety layer
-    └── requirements.txt
+files/
+├── main_laptop.py      ← Entry point on the laptop
+├── speech_input.py     ← Azure STT / fallback mic listener
+├── nlp_parser.py       ← GPT + rule-based command parser
+├── robot_client.py     ← TCP client to the robot
+├── config.py           ← Local API keys (ignored by git)
+├── main_robot.py       ← Entry point inside the robot ROS container
+├── motor_controller.py ← TCP → ROS bridge
+├── motor_test.py       ← Direct motor calibration test
+├── RUNBOOK.md          ← Docker-based operating procedure
+└── requirements.txt    ← Laptop Python dependencies
 ```
 
 ---
@@ -105,27 +96,19 @@ duckiebot/
 - Returns a list of command dicts (supports compound commands)
 
 ### Robot Server (Duckiebot)
-- Lightweight TCP server on port 9000
-- **Watchdog**: robot auto-stops motors if no command for 2 seconds; manual drive commands are re-sent from the laptop to keep motion active until `stop`
-- Parses newline-delimited JSON packets
-
-### Lane Follower (Duckiebot)
-- Detects **yellow** (left boundary) and **white** (right boundary) tape via HSV masking
-- Proportional steering correction
-- Toggle on/off via voice (`"follow the lane"` / `"manual"`)
-
-### Obstacle Avoider (Duckiebot)
-- Polls VL53L0X ToF sensor at 20 Hz
-- Slows down at 40cm, stops at 20cm
-- Allows backward escape movement
+- Lightweight TCP server on port `9010`
+- Runs inside the Duckietown `ros-interface` Docker container
+- Publishes manual commands to `/$VEHICLE_NAME/joy_mapper_node/car_cmd`
+- Publishes lane-follow toggles to `/$VEHICLE_NAME/lane_following_node/switch`
+- Uses a watchdog to send a hard stop if commands stop arriving
 
 ---
 
 ## Tips for Race Day
 
 1. **Say "stop" first** if anything goes wrong — it's the highest priority command.
-2. **Lane following mode** is great for straight sections; switch to manual for tight turns.
-3. **"Curve left/right"** is gentler than "turn left/right" — use for slight corrections.
+2. **Lane following mode** only works if the corresponding Duckietown lane-following node is running.
+3. **"Curve left/right"** is gentler than "left/right" — use for slight corrections.
 4. Speak clearly and at a normal pace — Azure STT handles accents well.
 5. Test your WiFi connection before the race. A ping < 50ms is ideal.
 6. Manual drive commands continue until you say `stop`; adjust `KEEPALIVE_INTERVAL` in `main_laptop.py` if you need a different resend cadence.
@@ -136,8 +119,8 @@ duckiebot/
 
 | Problem | Fix |
 |---------|-----|
-| Robot not connecting | Check robot IP, ensure `main_robot.py` is running, check firewall |
+| Robot not connecting | Check robot IP, ensure `main_robot.py` is running inside `ros-interface`, check firewall |
 | STT not working | Check Azure keys in `config.py`, or install `SpeechRecognition` fallback |
-| Lane follower veers off | Retune `YELLOW_LOW/HIGH`, `WHITE_LOW/HIGH` HSV values in `lane_follower.py` |
-| Motors not moving | Confirm motor IDs (`LEFT_MOTOR_ID`, `RIGHT_MOTOR_ID`) match your wiring |
-| Too slow/fast | Adjust `BASE_SPEED`, `TURN_SPEED` in `motor_controller.py` |
+| Lane mode does nothing | Confirm the Duckietown lane-following node is running and subscribed to `/$VEHICLE_NAME/lane_following_node/switch` |
+| Motors not moving | Confirm `car_cmd` messages are reaching Duckietown ROS and the wheel driver stack is healthy |
+| Robot turns too sharply or too slowly | Tune `DUCKIE_BASE_V`, `DUCKIE_TURN_V`, `DUCKIE_CURVE_OMEGA`, `DUCKIE_TURN_OMEGA`, and `DUCKIE_SPIN_OMEGA` in `motor_controller.py` |

@@ -9,7 +9,7 @@ import json
 import re
 import os
 import logging
-from typing import Optional
+from typing import List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -59,23 +59,23 @@ If unclear or unrelated to driving, return: {"cmd": "unknown"}
 # of "spin_left", because "left" appears in the string and the pattern is optional
 # on "turn\s+".
 RULES = [
-    # FIX: removed redundant "stop" entry — rule_parse() already handles stop
-    # via the dedicated early-return check above, so this entry was dead code.
-    # ↓ specific compound-direction patterns first
-    (r"\bgo\s+back\b",                                         "backward"),
-    (r"\b(spin|rotate)\s+left\b",                              "spin_left"),
-    (r"\b(spin|rotate)\s+right\b",                             "spin_right"),
-    (r"\b(curve|veer|bear|drift)\s+left\b",                    "curve_left"),
-    (r"\b(curve|veer|bear|drift)\s+right\b",                   "curve_right"),
-    # ↓ generic single-word directions after
-    (r"\b(forward|ahead|go|drive|straight|proceed)\b",         "forward"),
-    (r"\b(back(ward)?|reverse|behind)\b",                      "backward"),
-    (r"\b(turn\s+)?left\b",                                    "left"),
-    (r"\b(turn\s+)?right\b",                                   "right"),
-    (r"\b(faster|speed up|full speed|floor it|punch it)\b",    "speed"),
-    (r"\b(slower|slow down|half speed|easy|careful)\b",        "speed_half"),
-    (r"\b(auto|autonomous|lane follow|follow the lane)\b",     "lane_on"),
-    (r"\b(manual|take control|i.ll drive|override)\b",         "lane_off"),
+    # Specific compound phrases before generic directions.
+    (r"\b(?:go|move|head)\s+back(?:ward)?\b|\bback\s+up\b",    "backward"),
+    (r"\b(?:spin|rotate)\s+(?:to\s+the\s+)?left\b",            "spin_left"),
+    (r"\b(?:spin|rotate)\s+(?:to\s+the\s+)?right\b",           "spin_right"),
+    (r"\b(?:curve|veer|bear|drift)\s+(?:to\s+the\s+)?left\b",  "curve_left"),
+    (r"\b(?:curve|veer|bear|drift)\s+(?:to\s+the\s+)?right\b", "curve_right"),
+    # Generic drive commands.
+    (r"\b(?:go|move|drive|head|continue|proceed)\s+(?:forward|ahead|straight)\b", "forward"),
+    (r"\b(?:forward|ahead|straight)\b",                        "forward"),
+    (r"\b(?:backward|reverse|behind)\b",                       "backward"),
+    # Spoken turn variants. "go left/right" must not collapse to forward.
+    (r"\b(?:turn|go|head)\s+(?:to\s+the\s+)?left\b|\bleft\b",  "left"),
+    (r"\b(?:turn|go|head)\s+(?:to\s+the\s+)?right\b|\bright\b","right"),
+    (r"\b(?:faster|speed up|full speed|floor it|punch it)\b",  "speed"),
+    (r"\b(?:slower|slow down|half speed|easy|careful)\b",      "speed_half"),
+    (r"\b(?:auto|autonomous|lane follow|follow the lane)\b",   "lane_on"),
+    (r"\b(?:manual|take control|i.ll drive|override)\b",       "lane_off"),
 ]
 
 SPEED_MAP = {
@@ -84,13 +84,19 @@ SPEED_MAP = {
 }
 
 
+def normalize_text(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def rule_parse(text: str) -> Optional[dict]:
     """Fast regex-based parsing. Returns command dict or None if no match."""
-    text = text.lower().strip()
+    text = normalize_text(text)
     # Priority: stop always wins
     if re.search(r"\b(stop|halt|freeze|brake|emergency)\b", text):
         return {"cmd": "stop"}
-    for pattern, cmd in RULES[1:]:
+    for pattern, cmd in RULES:
         if re.search(pattern, text):
             return SPEED_MAP.get(cmd, {"cmd": cmd})
     return None
@@ -113,7 +119,7 @@ class GPTParser:
             self.enabled = False
             log.info("GPT parser disabled — rule-based only")
 
-    def parse(self, text: str) -> list[dict]:
+    def parse(self, text: str) -> List[dict]:
         """
         Returns a list of command dicts parsed from text.
         Tries rule-based first, falls back to GPT for complex sentences.
@@ -150,9 +156,9 @@ class GPTParser:
 
 
 # ─── Module-level singleton ───────────────────────────────────────────────────
-_parser: GPTParser | None = None
+_parser = None  # type: Optional[GPTParser]
 
-def parse_command(text: str) -> list[dict]:
+def parse_command(text: str) -> List[dict]:
     """Convenience function: parse text → list of command dicts.
     Owns the singleton directly — get_parser() indirection removed as redundant.
     """
