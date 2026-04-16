@@ -4,7 +4,7 @@ This runbook describes the standard operating procedure for running the current 
 
 ## Paths
 
-- Laptop code: `/Users/mustakahmad/Library/CloudStorage/OneDrive-purdue.edu/2026_Purdue_Spring/NLP595/duckie_new/files`
+- Laptop code: your local clone of this repository
 - Robot host code: `/home/duckie/robot/files`
 - Robot Docker container code: `/root/robot/files`
 - Robot IP: `10.0.0.185`
@@ -52,12 +52,12 @@ root@duckiebot14:...
 
 ## 1. Update Robot Files
 
-Run these commands on the laptop when `main_robot.py` or `motor_controller.py` changes:
+Run these commands on the laptop from the local repository directory when `main_robot.py` or `motor_controller.py` changes:
 
 ```bash
 ssh duckie@10.0.0.185 "mkdir -p /home/duckie/robot/files"
-scp "/Users/mustakahmad/Library/CloudStorage/OneDrive-purdue.edu/2026_Purdue_Spring/NLP595/duckie_new/files/main_robot.py" duckie@10.0.0.185:/home/duckie/robot/files/
-scp "/Users/mustakahmad/Library/CloudStorage/OneDrive-purdue.edu/2026_Purdue_Spring/NLP595/duckie_new/files/motor_controller.py" duckie@10.0.0.185:/home/duckie/robot/files/
+scp main_robot.py duckie@10.0.0.185:/home/duckie/robot/files/
+scp motor_controller.py duckie@10.0.0.185:/home/duckie/robot/files/
 ```
 
 ## 2. Copy Files Into Docker
@@ -98,10 +98,9 @@ you are running in the wrong shell. Exit and rerun inside the `ros-interface` co
 
 ## 4. Start the Laptop Controller
 
-Run these commands on the Mac laptop:
+Run these commands on the laptop from the local repository directory:
 
 ```bash
-cd "/Users/mustakahmad/Library/CloudStorage/OneDrive-purdue.edu/2026_Purdue_Spring/NLP595/duckie_new/files"
 ./.venv/bin/python main_laptop.py --robot-ip 10.0.0.185 --robot-port 9010
 ```
 
@@ -116,7 +115,6 @@ Duckiebot Voice Controller READY
 If the virtual environment is missing, create it on the laptop:
 
 ```bash
-cd "/Users/mustakahmad/Library/CloudStorage/OneDrive-purdue.edu/2026_Purdue_Spring/NLP595/duckie_new/files"
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install --upgrade pip
@@ -214,7 +212,6 @@ No speech recognition library available
 Fix:
 
 ```bash
-cd "/Users/mustakahmad/Library/CloudStorage/OneDrive-purdue.edu/2026_Purdue_Spring/NLP595/duckie_new/files"
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install --upgrade pip
@@ -243,7 +240,6 @@ Path:
 ### Laptop
 
 ```bash
-cd "/Users/mustakahmad/Library/CloudStorage/OneDrive-purdue.edu/2026_Purdue_Spring/NLP595/duckie_new/files"
 ./.venv/bin/python main_laptop.py --robot-ip 10.0.0.185 --robot-port 9010
 ```
 
