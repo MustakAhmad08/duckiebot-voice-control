@@ -1,4 +1,4 @@
-# Duckiebot Voice Controller — ECE49595NL HW2
+# Duckiebot Voice Controller
 
 Drive a Duckiebot robot using spoken English. Speech → Azure STT → GPT parser → TCP → ROS.
 
