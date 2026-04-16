@@ -7,7 +7,7 @@ This runbook describes the standard operating procedure for running the current 
 - Laptop code: your local clone of this repository
 - Robot host code: `/home/duckie/robot/files`
 - Robot Docker container code: `/root/robot/files`
-- Robot IP: `10.0.0.185`
+- Robot IP: use the current IP address of your Duckiebot on the local network
 - ROS container: `ros-interface`
 - Robot bridge port: `9010`
 
@@ -50,14 +50,30 @@ Prompt looks like:
 root@duckiebot14:...
 ```
 
+## 0. Set the Robot IP
+
+Before running any laptop-side commands, set the robot IP for your current session:
+
+```bash
+export ROBOT_IP=<ROBOT_IP_ADDRESS>
+```
+
+Example:
+
+```bash
+export ROBOT_IP=10.0.0.185
+```
+
+Use the actual address assigned to your robot. If the IP changes, update `ROBOT_IP` and rerun the laptop commands with the new value.
+
 ## 1. Update Robot Files
 
 Run these commands on the laptop from the local repository directory when `main_robot.py` or `motor_controller.py` changes:
 
 ```bash
-ssh duckie@10.0.0.185 "mkdir -p /home/duckie/robot/files"
-scp main_robot.py duckie@10.0.0.185:/home/duckie/robot/files/
-scp motor_controller.py duckie@10.0.0.185:/home/duckie/robot/files/
+ssh duckie@$ROBOT_IP "mkdir -p /home/duckie/robot/files"
+scp main_robot.py duckie@$ROBOT_IP:/home/duckie/robot/files/
+scp motor_controller.py duckie@$ROBOT_IP:/home/duckie/robot/files/
 ```
 
 ## 2. Copy Files Into Docker
@@ -101,14 +117,14 @@ you are running in the wrong shell. Exit and rerun inside the `ros-interface` co
 Run these commands on the laptop from the local repository directory:
 
 ```bash
-./.venv/bin/python main_laptop.py --robot-ip 10.0.0.185 --robot-port 9010
+./.venv/bin/python main_laptop.py --robot-ip "$ROBOT_IP" --robot-port 9010
 ```
 
 Expected output includes:
 
 ```text
 Using Azure Speech SDK
-Connected to robot at 10.0.0.185:9010
+Connected to robot at <ROBOT_IP>:9010
 Duckiebot Voice Controller READY
 ```
 
@@ -221,7 +237,7 @@ python3 -m pip install azure-cognitiveservices-speech openai SpeechRecognition
 Then run:
 
 ```bash
-./.venv/bin/python main_laptop.py --robot-ip 10.0.0.185 --robot-port 9010
+./.venv/bin/python main_laptop.py --robot-ip "$ROBOT_IP" --robot-port 9010
 ```
 
 ### Microphone Permission on macOS
@@ -240,7 +256,7 @@ Path:
 ### Laptop
 
 ```bash
-./.venv/bin/python main_laptop.py --robot-ip 10.0.0.185 --robot-port 9010
+./.venv/bin/python main_laptop.py --robot-ip "$ROBOT_IP" --robot-port 9010
 ```
 
 ### Robot Host
