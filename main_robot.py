@@ -23,8 +23,7 @@ from motor_controller import RobotServer, ROSDriver, PORT
 
 logging.basicConfig(
     level=logging.INFO,
-    format="[ROBOT-MAIN] %(asctime)s %(levelname)s %(message)s",
-    force=True,
+    format="[ROBOT-MAIN] %(asctime)s %(levelname)s %(message)s"
 )
 log = logging.getLogger(__name__)
 

@@ -23,7 +23,7 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 MOTION_COMMANDS = {
-    "forward", "backward", "left", "right",
+    "forward", "backward",
     "spin_left", "spin_right", "curve_left", "curve_right", "speed"
 }
 
@@ -101,7 +101,7 @@ class DuckiebotController:
                 self._active_motion_cmd = dict(cmd)
                 self._last_sent_cmd = None
                 self._last_send_time = 0
-            elif cmd_name in {"stop", "lane_on", "lane_off"}:
+            elif cmd_name in {"left", "right", "stop", "lane_on", "lane_off"}:
                 self._active_motion_cmd = None
                 self._last_sent_cmd = None
 
