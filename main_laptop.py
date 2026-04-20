@@ -30,6 +30,17 @@ MOTION_COMMANDS = {
 KEEPALIVE_INTERVAL = 0.2
 RESEND_INTERVAL = 0.6   # ✅ NEW: slower resend for same command
 
+EXPANDED_COMMAND_SEQUENCES = {
+    "lane_on": [
+        {"cmd": "autopilot_on"},
+        {"cmd": "lane_switch_on"},
+    ],
+    "lane_off": [
+        {"cmd": "lane_switch_off"},
+        {"cmd": "autopilot_off"},
+    ],
+}
+
 
 class DuckiebotController:
 
@@ -86,10 +97,19 @@ class DuckiebotController:
 
             log.info(f"Command: {cmd}")
 
+            expanded = self._expand_command(cmd)
+
             if self.client.is_connected:
-                self.client.send_command(cmd)
+                self.client.send_commands(expanded)
 
             self._update_active_motion(cmd)
+
+    def _expand_command(self, cmd: dict):
+        cmd_name = cmd.get("cmd", "unknown")
+        sequence = EXPANDED_COMMAND_SEQUENCES.get(cmd_name)
+        if not sequence:
+            return [cmd]
+        return [dict(item) for item in sequence]
 
     # ─────────────────────────────────────────────
 

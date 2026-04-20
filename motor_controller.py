@@ -43,11 +43,13 @@ ROBOT_NAME = os.environ.get("VEHICLE_NAME", "duckie")
 
 # Normalised wheel speed (0.0 – 1.0) sent to WheelsCmdStamped
 MAX_WHEEL = 1.0
-BASE_WHEEL = 0.4
-ARC_RATIO = 0.2   # inner wheel fraction during arc turn (0 = tighter, 0.5 = gentle)
+BASE_WHEEL = 0.3
+ARC_RATIO = 0.8   # inner wheel fraction during arc turn (0 = tighter, 0.5 = gentle)
 
-TURN_90_DURATION = float(os.environ.get("DUCKIE_TURN_90_DURATION", "0.5"))
+TURN_90_DURATION = float(os.environ.get("DUCKIE_TURN_90_DURATION", "1.0"))
 TURN_IN_PLACE_WHEEL = float(os.environ.get("DUCKIE_TURN_IN_PLACE_WHEEL", "0.5"))
+LEFT_WHEEL_SCALE = float(os.environ.get("DUCKIE_LEFT_WHEEL_SCALE", "1.0"))
+RIGHT_WHEEL_SCALE = float(os.environ.get("DUCKIE_RIGHT_WHEEL_SCALE", "1.0"))
 
 
 # ─── ROS Publisher wrapper ────────────────────────────────────────────────────
@@ -80,10 +82,23 @@ class ROSDriver:
             self._lane_pub = None
             self._joy_override_pub = None
 
+    def _calibrate_wheels(self, left: float, right: float):
+        """
+        Apply simple per-wheel scaling for manual wheel_cmd control.
+        This bridge bypasses Duckietown kinematics_node during manual driving,
+        so straight-line trim must be handled here.
+        """
+        left *= LEFT_WHEEL_SCALE
+        right *= RIGHT_WHEEL_SCALE
+        left = max(-MAX_WHEEL, min(MAX_WHEEL, left))
+        right = max(-MAX_WHEEL, min(MAX_WHEEL, right))
+        return left, right
+
     def set_wheels(self, left: float, right: float):
         """Publish normalised wheel speeds in [-1.0, 1.0]."""
-        left = max(-MAX_WHEEL, min(MAX_WHEEL, float(left)))
-        right = max(-MAX_WHEEL, min(MAX_WHEEL, float(right)))
+        left = float(left)
+        right = float(right)
+        left, right = self._calibrate_wheels(left, right)
 
         if ROS_AVAILABLE:
             msg = WheelsCmdStamped()
@@ -94,30 +109,38 @@ class ROSDriver:
         else:
             log.info(f"[SIM] wheels L={left:+.2f}  R={right:+.2f}")
 
+    def set_autopilot(self, enabled: bool):
+        """
+        Toggle JoyMapper autonomy explicitly.
+        joystick_override=False enables autonomy.
+        joystick_override=True returns to manual driving.
+        """
+        if ROS_AVAILABLE:
+            joy_msg = BoolStamped()
+            joy_msg.header.stamp = rospy.Time.now()
+            joy_msg.data = not enabled
+            self._joy_override_pub.publish(joy_msg)
+        else:
+            log.info(f"[SIM] joystick_override={'OFF' if enabled else 'ON'}")
+
+    def set_lane_switch(self, enabled: bool):
+        """Toggle the legacy lane-following switch topic explicitly."""
+        if ROS_AVAILABLE:
+            lane_msg = BoolStamped()
+            lane_msg.header.stamp = rospy.Time.now()
+            lane_msg.data = enabled
+            self._lane_pub.publish(lane_msg)
+        else:
+            log.info(f"[SIM] lane_following={'ON' if enabled else 'OFF'}")
+
     def set_lane(self, enabled: bool):
         """
         Toggle lane following through the official JoyMapper override path.
         In Duckietown, joystick_override=False enables autonomy and
         joystick_override=True returns control to manual driving.
         """
-        if ROS_AVAILABLE:
-            stamp = rospy.Time.now()
-
-            joy_msg = BoolStamped()
-            joy_msg.header.stamp = stamp
-            joy_msg.data = not enabled
-            self._joy_override_pub.publish(joy_msg)
-
-            # Legacy compatibility
-            lane_msg = BoolStamped()
-            lane_msg.header.stamp = stamp
-            lane_msg.data = enabled
-            self._lane_pub.publish(lane_msg)
-        else:
-            log.info(
-                f"[SIM] lane_following={'ON' if enabled else 'OFF'} "
-                f"joystick_override={'OFF' if enabled else 'ON'}"
-            )
+        self.set_autopilot(enabled)
+        self.set_lane_switch(enabled)
 
     def stop(self):
         self.set_wheels(0.0, 0.0)
@@ -233,9 +256,14 @@ class RobotServer:
         arc = BASE_WHEEL * ARC_RATIO
         speed = param * MAX_WHEEL
 
+        # # Only cancel timed turn if the incoming command is intended to interrupt it
+        # if cmd in {"stop", "forward", "backward", "curve_left", "curve_right",
+        #            "spin_left", "spin_right", "speed", "lane_on", "lane_off",
+        #            "autopilot_on", "autopilot_off", "lane_switch_on", "lane_switch_off"}:
+
         # Only cancel timed turn if the incoming command is intended to interrupt it
-        if cmd in {"stop", "forward", "backward", "curve_left", "curve_right",
-                   "spin_left", "spin_right", "speed", "lane_on", "lane_off"}:
+        if cmd in {"stop", "forward", "backward","speed", "lane_on", "lane_off",
+                   "autopilot_on", "autopilot_off", "lane_switch_on", "lane_switch_off"}:
             self._cancel_turn_timer()
 
         commands = {
@@ -245,9 +273,13 @@ class RobotServer:
             "right":       lambda: self._timed_turn(TURN_IN_PLACE_WHEEL, -TURN_IN_PLACE_WHEEL),
             "curve_left":  lambda: self.driver.set_wheels(arc, BASE_WHEEL),
             "curve_right": lambda: self.driver.set_wheels(BASE_WHEEL, arc),
-            "spin_left":   lambda: self.driver.set_wheels(-MAX_WHEEL, MAX_WHEEL),
-            "spin_right":  lambda: self.driver.set_wheels(MAX_WHEEL, -MAX_WHEEL),
+            "spin_left":   lambda: self.driver.set_wheels(-BASE_WHEEL, BASE_WHEEL),
+            "spin_right":  lambda: self.driver.set_wheels(BASE_WHEEL, -BASE_WHEEL),
             "stop":        lambda: self.driver.stop(),
+            "autopilot_on":  lambda: self.driver.set_autopilot(True),
+            "autopilot_off": lambda: self.driver.set_autopilot(False),
+            "lane_switch_on":  lambda: self.driver.set_lane_switch(True),
+            "lane_switch_off": lambda: self.driver.set_lane_switch(False),
             "lane_on":     lambda: self.driver.set_lane(True),
             "lane_off":    lambda: self.driver.set_lane(False),
             "speed":       lambda: self.driver.set_wheels(speed, speed),

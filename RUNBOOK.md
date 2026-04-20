@@ -17,6 +17,8 @@ This runbook describes the standard operating procedure for running the current 
 - Run `main_robot.py` only inside the `ros-interface` Docker container.
 - Do not run `main_robot.py` on the robot host shell.
 - When robot-side files change, copy them to the robot host and then into the container.
+- `left` and `right` are one-shot timed turns. `curve_left` and `curve_right` are continuous.
+- `follow the lane` and `manual` toggle JoyMapper autopilot by publishing `/$VEHICLE_NAME/joy_mapper_node/joystick_override`.
 
 ## Terminal Roles
 
@@ -143,14 +145,18 @@ Open another robot host terminal and run:
 
 ```bash
 docker exec -it ros-interface bash
-rostopic echo /$VEHICLE_NAME/joy_mapper_node/car_cmd
+rostopic echo /$VEHICLE_NAME/wheels_driver_node/wheels_cmd
 ```
 
-Optional lane-follow switch check:
+For lane-mode verification:
 
 ```bash
-rostopic echo /$VEHICLE_NAME/lane_following_node/switch
+rostopic echo /$VEHICLE_NAME/joy_mapper_node/joystick_override
 ```
+
+Expected:
+- `follow the lane` publishes `data: False`
+- `manual` publishes `data: True`
 
 ## 6. Test Sequence
 
@@ -165,7 +171,8 @@ After both sides are running, say these commands in order:
 Expected result:
 
 - the robot bridge terminal prints `CMD: ...`
-- the `car_cmd` topic shows `Twist2DStamped` messages
+- `left` and `right` turn once and stop automatically
+- `follow the lane` / `manual` flip `joy_mapper_node/joystick_override`
 
 ## Shutdown
 
@@ -217,6 +224,25 @@ pkill -f "main_robot.py --port 9010"
 
 Then restart the bridge.
 
+### Left/Right Turn Angle Is Wrong
+
+Symptom:
+- `left` or `right` turns too little or too much
+
+Fix:
+- tune the timed-turn constants before starting `main_robot.py`
+
+Example:
+
+```bash
+export DUCKIE_TURN_90_DURATION=0.9
+export DUCKIE_TURN_IN_PLACE_WHEEL=0.8
+python3 main_robot.py --port 9010
+```
+
+- increase `DUCKIE_TURN_90_DURATION` to turn more
+- decrease it to turn less
+
 ### Laptop Speech Packages Missing
 
 Symptom:
@@ -266,3 +292,13 @@ docker exec -it ros-interface bash
 cd /root/robot/files
 python3 main_robot.py --port 9010
 ```
+
+### Official Dashboard Check
+
+On the laptop:
+
+```bash
+dts duckiebot keyboard_control --browser duckiebot14
+```
+
+Then open the printed local URL in a browser. The dashboard autopilot state should reflect the same JoyMapper state changed by `follow the lane` and `manual`.

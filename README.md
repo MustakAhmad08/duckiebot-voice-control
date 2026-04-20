@@ -14,7 +14,7 @@ Drive a Duckiebot robot using spoken English. Speech → Azure STT → GPT parse
 ┌──────────────────────────────┴───────────────────────────────────┐
 │  DUCKIEBOT (Jetson Nano)                                          │
 │                                                                   │
-│  RobotServer → joy_mapper_node/car_cmd                            │
+│  RobotServer → wheels_cmd / joystick_override                     │
 │             ↕                                                     │
 │  Duckietown ROS nodes (kinematics, wheels, lane following)        │
 └──────────────────────────────────────────────────────────────────┘
@@ -53,8 +53,8 @@ cd files
 | Say this…                          | Does this…              |
 |------------------------------------|-------------------------|
 | "go forward"                       | Drive forward until stopped |
-| "turn left"                        | Arc left until stopped  |
-| "turn right"                       | Arc right until stopped |
+| "turn left"                        | Rotate about 90° left, then stop |
+| "turn right"                       | Rotate about 90° right, then stop |
 | "stop" / "halt" / "brake"          | Stop immediately        |
 | "reverse" / "go back"              | Reverse until stopped   |
 | "curve left" / "veer right"        | Soft curve until stopped |
@@ -98,9 +98,11 @@ files/
 ### Robot Server (Duckiebot)
 - Lightweight TCP server on port `9010`
 - Runs inside the Duckietown `ros-interface` Docker container
-- Publishes manual commands to `/$VEHICLE_NAME/joy_mapper_node/car_cmd`
-- Publishes lane-follow toggles to `/$VEHICLE_NAME/lane_following_node/switch`
+- Publishes manual drive commands to `/$VEHICLE_NAME/wheels_driver_node/wheels_cmd`
+- Publishes autopilot toggles to `/$VEHICLE_NAME/joy_mapper_node/joystick_override`
+- Also publishes the legacy `/$VEHICLE_NAME/lane_following_node/switch` topic as a compatibility fallback
 - Uses a watchdog to send a hard stop if commands stop arriving
+- Treats `left` and `right` as one-shot timed turns; `curve_left` and `curve_right` remain continuous
 
 ---
 
@@ -108,10 +110,10 @@ files/
 
 1. **Say "stop" first** if anything goes wrong — it's the highest priority command.
 2. **Lane following mode** only works if the corresponding Duckietown lane-following node is running.
-3. **"Curve left/right"** is gentler than "left/right" — use for slight corrections.
+3. **"Left/right"** are discrete 90-degree turns. Use **"curve left/right"** for slight corrections.
 4. Speak clearly and at a normal pace — Azure STT handles accents well.
 5. Test your WiFi connection before the race. A ping < 50ms is ideal.
-6. Manual drive commands continue until you say `stop`; adjust `KEEPALIVE_INTERVAL` in `main_laptop.py` if you need a different resend cadence.
+6. Manual drive commands like `forward` and `curve_right` continue until you say `stop`; `left` and `right` do not repeat.
 
 ---
 
@@ -121,6 +123,7 @@ files/
 |---------|-----|
 | Robot not connecting | Check robot IP, ensure `main_robot.py` is running inside `ros-interface`, check firewall |
 | STT not working | Check Azure keys in `config.py`, or install `SpeechRecognition` fallback |
-| Lane mode does nothing | Confirm the Duckietown lane-following node is running and subscribed to `/$VEHICLE_NAME/lane_following_node/switch` |
-| Motors not moving | Confirm `car_cmd` messages are reaching Duckietown ROS and the wheel driver stack is healthy |
-| Robot turns too sharply or too slowly | Tune `DUCKIE_BASE_V`, `DUCKIE_TURN_V`, `DUCKIE_CURVE_OMEGA`, `DUCKIE_TURN_OMEGA`, and `DUCKIE_SPIN_OMEGA` in `motor_controller.py` |
+| Lane mode does nothing | Confirm the official lane-following stack is running and `/$VEHICLE_NAME/joy_mapper_node/joystick_override` changes when you say `follow the lane` |
+| Dashboard mode does not change | Check `rostopic echo /$VEHICLE_NAME/joy_mapper_node/joystick_override`; `follow the lane` should send `False`, `manual` should send `True` |
+| Motors not moving | Confirm wheel commands are reaching `/$VEHICLE_NAME/wheels_driver_node/wheels_cmd` and the Duckietown wheel driver stack is healthy |
+| Left/right turn angle is off | Tune `DUCKIE_TURN_90_DURATION` and `DUCKIE_TURN_IN_PLACE_WHEEL` in `motor_controller.py` |
