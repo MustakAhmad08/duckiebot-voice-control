@@ -43,7 +43,7 @@ ARC_RATIO          = float(os.environ.get("DUCKIE_ARC_RATIO",          "0.5"))
 TURN_IN_PLACE_WHEEL = float(os.environ.get("DUCKIE_TURN_IN_PLACE_WHEEL", "0.3"))
 BASE_SPEED_SCALE   = float(os.environ.get("DUCKIE_BASE_SPEED_SCALE",   "1.0"))
 LEFT_WHEEL_SCALE   = float(os.environ.get("DUCKIE_LEFT_WHEEL_SCALE",   "1.0"))
-RIGHT_WHEEL_SCALE  = float(os.environ.get("DUCKIE_RIGHT_WHEEL_SCALE",  "0.93"))
+RIGHT_WHEEL_SCALE  = float(os.environ.get("DUCKIE_RIGHT_WHEEL_SCALE",  "1.0"))
 
 # At TURN_IN_PLACE_WHEEL=0.3 a Duckiebot turns ~180°/s → 90° ≈ 0.5s.
 # Tune with DUCKIE_TURN_90_DURATION if your robot over/undershoots.
